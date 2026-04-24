@@ -9,12 +9,12 @@ class InvoiceLineItemInline(admin.TabularInline):
 
 @admin.register(Invoice)
 class InvoiceAdmin(admin.ModelAdmin):
-    list_display = ['invoice_no', 'invoice_date', 'total_amount']
-    search_fields = ['invoice_no']
+    list_display = ['invoiceNo', 'invoicedate', 'totalAmount', 'status']
+    search_fields = ['invoiceNo']
     inlines = [InvoiceLineItemInline]
 
 
 @admin.register(InvoiceLineItem)
 class InvoiceLineItemAdmin(admin.ModelAdmin):
-    list_display = ['invoice', 'description', 'amount', 'is_matched']
-    search_fields = ['description', 'invoice__invoice_no']
+    list_display = ['invoice', 'description', 'amt', 'category']
+    search_fields = ['description', 'invoice__invoiceNo']

@@ -15,7 +15,7 @@ from langchain_aws import ChatBedrock
 from langchain_core.messages import HumanMessage
 from langgraph.graph import StateGraph, END
 
-from invoicemanagement.models import Invoice, InvoiceEntry
+from invoicemanagement.models import Invoice, InvoiceLineItem
 from document.models import Document, ProcessingLog
 
 
@@ -175,9 +175,9 @@ def save_invoice_data(document: Document, invoice_data: InvoiceData) -> Invoice:
         extraction_method='langchain'
     )
     
-    # Create InvoiceEntry records
+    # Create InvoiceLineItem records
     for entry_data in invoice_data.invoice_entries:
-        InvoiceEntry.objects.create(
+        InvoiceLineItem.objects.create(
             invoice=invoice,
             description=entry_data.description,
             amt=entry_data.amt
