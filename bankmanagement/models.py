@@ -14,7 +14,6 @@ class BankStatement(models.Model):
     ]
     
     document = models.OneToOneField(Document, on_delete=models.CASCADE, related_name='bank_statement')
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
     
     # Bank statement basic information
     statement_period = models.CharField(max_length=100, blank=True, null=True)
@@ -22,11 +21,17 @@ class BankStatement(models.Model):
     bank_name = models.CharField(max_length=255, blank=True, null=True)
     account_number = models.CharField(max_length=50, blank=True, null=True)
     account_type = models.CharField(max_length=50, blank=True, null=True)
+    account_holder_name = models.CharField(max_length=255, blank=True, null=True)
     
     # Balance information
     opening_balance = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True)
     closing_balance = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True)
     currency = models.CharField(max_length=10, default='USD')
+    
+    # Summary information (from LLM extraction)
+    total_debit_amount = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True)
+    total_credit_amount = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True)
+    number_of_txn = models.IntegerField(blank=True, null=True)
     
     # Metadata
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
@@ -72,6 +77,12 @@ class BankTransaction(models.Model):
     balance_after_transaction = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True)
     category = models.CharField(max_length=100, blank=True, null=True)
     payee = models.CharField(max_length=255, blank=True, null=True)
+    
+    # Fields to match LLM extraction
+    debit = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True)
+    credit = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True)
+    balance = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True)
+    reference = models.CharField(max_length=100, blank=True, null=True)
     
     # Metadata
     confidence_score = models.FloatField(blank=True, null=True)
