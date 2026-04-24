@@ -2,6 +2,7 @@ import os
 import json
 import re
 import pandas as pd
+import shutil
 from typing import List, Optional, TypedDict
 from datetime import datetime
 from django.conf import settings
@@ -199,6 +200,48 @@ def save_bank_statement_data(document: Document, statement_data: BankStatementDa
     
     return bank_statement
 
+def move_processed_file(document: Document) -> bool:
+    """Move file from media/upload to media/processed after successful parsing"""
+    try:
+        if not document.file:
+            return False
+            
+        # Get current file path
+        current_path = document.file.path
+        
+        # Check if file is in upload directory
+        if 'upload' not in current_path:
+            return True  # Already moved or not in upload
+            
+        # Create processed directory if it doesn't exist
+        media_root = getattr(settings, 'MEDIA_ROOT', 'media')
+        processed_dir = os.path.join(media_root, 'processed')
+        os.makedirs(processed_dir, exist_ok=True)
+        
+        # Get filename and create new path
+        filename = os.path.basename(current_path)
+        new_path = os.path.join(processed_dir, filename)
+        
+        # If file already exists in processed, add timestamp
+        if os.path.exists(new_path):
+            name, ext = os.path.splitext(filename)
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            new_path = os.path.join(processed_dir, f"{name}_{timestamp}{ext}")
+        
+        # Move the file
+        shutil.move(current_path, new_path)
+        
+        # Update document file path
+        relative_new_path = os.path.relpath(new_path, media_root)
+        document.file.name = relative_new_path
+        document.save()
+        
+        return True
+        
+    except Exception as e:
+        print(f"Error moving file: {str(e)}")
+        return False
+
 def log_processing_step(document: Document, step_name: str, status: str, 
                        error_message: str = None, duration: float = None):
     """Log processing steps for debugging and monitoring"""
@@ -251,6 +294,11 @@ def process_bank_statement(document: Document) -> dict:
         # Update document status
         document.status = Document.StatusChoices.PARSED
         document.save()
+        
+        # Move file to processed directory
+        move_success = move_processed_file(document)
+        if not move_success:
+            print(f"Warning: Failed to move file for document {document.id}")
         
         # Log success
         duration = (datetime.now() - start_time).total_seconds()

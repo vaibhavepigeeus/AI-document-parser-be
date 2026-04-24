@@ -20,13 +20,13 @@ class Invoice(models.Model):
     totalAmount = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True)
     
     # Metadata
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft', null=True, blank=True)
     confidence_score = models.FloatField(blank=True, null=True)
     extraction_method = models.CharField(max_length=50, blank=True, null=True)
     
     # Timestamps
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
 
     def __str__(self):
         return f"Invoice - {self.invoiceNo or 'Unknown'} ({self.invoicedate or 'N/A'})"
@@ -35,14 +35,14 @@ class Invoice(models.Model):
         ordering = ['-created_at']
 
 
-class InvoiceEntry(models.Model):
+class InvoiceLineItem(models.Model):
     """Model to store individual invoice line items"""
     
     invoice = models.ForeignKey(Invoice, on_delete=models.CASCADE, related_name='invoice_entries')
     
     # Line item details
-    description = models.TextField()
-    amt = models.DecimalField(max_digits=15, decimal_places=2)
+    description = models.TextField(null=True, blank=True)
+    amt = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
     
     # Additional fields
     category = models.CharField(max_length=100, blank=True, null=True)
@@ -53,8 +53,8 @@ class InvoiceEntry(models.Model):
     confidence_score = models.FloatField(blank=True, null=True)
     
     # Timestamps
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
 
     def __str__(self):
         return f"{self.description} - {self.amt}"

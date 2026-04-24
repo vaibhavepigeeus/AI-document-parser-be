@@ -4,7 +4,6 @@ Document classification services converted from module2.py
 import os
 import re
 from typing import Dict, Any, Optional
-from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_aws import ChatBedrock
 import boto3
@@ -14,8 +13,6 @@ from document.models import Document, ProcessingLog
 
 logger = logging.getLogger(__name__)
 
-# Load environment variables
-load_dotenv()
 
 
 class ClassificationService:
