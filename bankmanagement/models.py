@@ -14,7 +14,6 @@ class BankStatement(models.Model):
     ]
     
     document = models.OneToOneField(Document, on_delete=models.CASCADE, related_name='bank_statement')
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
     
     # Bank statement basic information
     statement_period = models.CharField(max_length=100, blank=True, null=True)
@@ -37,6 +36,15 @@ class BankStatement(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
+    account_holder_name = models.CharField(max_length=255)
+    number_of_txn = models.PositiveIntegerField()
+    total_credit_amount = models.DecimalField(max_digits=15, decimal_places=2)
+    total_debit_amount = models.DecimalField(
+        max_digits=15, 
+        decimal_places=2, 
+        null=True, 
+        blank=True
+    )
     def __str__(self):
         return f"Bank Statement - {self.bank_name or 'Unknown Bank'} ({self.statement_period or 'N/A'})"
     
@@ -80,6 +88,27 @@ class BankTransaction(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
+    balance = models.DecimalField(max_digits=15, decimal_places=2)
+    credit = models.DecimalField(max_digits=15, decimal_places=2)
+    debit = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        null=True,
+        blank=True
+    )
+    reference = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True
+    )
+    total_credit_amount = models.DecimalField(max_digits=15, decimal_places=2)
+    total_debit_amount = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        null=True,
+        blank=True
+    )
+
     def __str__(self):
         return f"{self.transaction_type.title()} - {self.amount} ({self.transaction_date})"
     
