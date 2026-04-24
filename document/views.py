@@ -29,8 +29,8 @@ class DocumentUploadView(generics.CreateAPIView):
             # Create the document with basic info
             document = serializer.save()
             
-            # Set status to processing - background scheduler will pick this up
-            document.status = Document.StatusChoices.PROCESSING
+            # Set status to uploaded - background scheduler will pick this up
+            document.status = Document.StatusChoices.UPLOADED
             document.save()
         
         return document
