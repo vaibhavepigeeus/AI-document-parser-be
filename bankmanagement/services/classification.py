@@ -3,6 +3,7 @@ Document classification services converted from module2.py
 """
 import os
 import re
+import pandas as pd
 from typing import Dict, Any, Optional
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_aws import ChatBedrock
@@ -14,13 +15,53 @@ from document.models import Document, ProcessingLog
 logger = logging.getLogger(__name__)
 
 
+def extract_text_from_file(file_path: str) -> str:
+    """Extract text content from various file formats"""
+    try:
+        if file_path.endswith(('.xlsx', '.xls')):
+            df = pd.read_excel(file_path).fillna('')
+            return df.to_csv(index=False)
+        elif file_path.endswith('.csv'):
+            df = pd.read_csv(file_path).fillna('')
+            return df.to_csv(index=False)
+        elif file_path.endswith('.pdf'):
+            # For PDF files, you might want to use a PDF parsing library
+            # For now, return a placeholder or implement PDF parsing
+            try:
+                import PyPDF2
+                with open(file_path, 'rb') as file:
+                    reader = PyPDF2.PdfReader(file)
+                    text = ""
+                    for page in reader.pages:
+                        text += page.extract_text()
+                    return text
+            except ImportError:
+                logger.warning("PyPDF2 not available, PDF parsing may not work properly")
+                return ""
+        else:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                return f.read()
+    except Exception as e:
+        logger.error(f"Error reading file {file_path}: {str(e)}")
+        raise Exception(f"Error reading file {file_path}: {str(e)}")
+
 
 class ClassificationService:
     """Service for classifying documents (invoice vs bank statement)"""
     
     def __init__(self, document: Document):
         self.document = document
-        self.extracted_text = document.extracted_text or ""
+        self.extracted_text = self._extract_text_from_document()
+    
+    def _extract_text_from_document(self) -> str:
+        """Extract text content from the document file"""
+        try:
+            if not self.document.file:
+                return ""
+            return extract_text_from_file(self.document.file.path)
+        except Exception as e:
+            logger.error(f"Failed to extract text from document {self.document.id}: {e}")
+            return ""
     
     def classify_document(self) -> Dict[str, Any]:
         """

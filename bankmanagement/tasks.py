@@ -10,7 +10,7 @@ from django.db import transaction
 from document.models import Document, ProcessingResult, ProcessingLog
 from .services.extraction import extract_text_from_document
 from .services.classification import classify_document
-from .services.invoice_parsing import parse_invoice
+from .services.invoice_parsing import process_invoice
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,8 @@ def process_document_task(document_id: str) -> dict:
         # Step 3: Route based on document type
         if document.document_type == 'invoice':
             logger.info("Step 3: Processing invoice")
-            invoice_data = parse_invoice(document)
+            invoice_result = process_invoice(document)
+            invoice_data = invoice_result.get('data') if invoice_result.get('success') else None
             
             # Store invoice data
             processing_result.structured_data = invoice_data

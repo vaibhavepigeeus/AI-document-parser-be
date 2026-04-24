@@ -1,324 +1,304 @@
-"""
-Invoice parsing services converted from module_6.py
-"""
+import os
 import json
-import logging
-from typing import Dict, Any, Optional
-from django.utils import timezone
+import re
+import pandas as pd
+from typing import List, Optional, TypedDict
+from pydantic import BaseModel, Field, ValidationError
+from PyPDF2 import PdfReader
+from PIL import Image
+import pytesseract
+from datetime import datetime
 
+# LangChain / AWS Imports
+from langchain_aws import ChatBedrock 
+from langchain_core.messages import HumanMessage
+from langgraph.graph import StateGraph, END
+
+# Django imports
+from django.conf import settings
+from django.db import transaction
 from document.models import Document, ProcessingLog
-from .classification import ClassificationService
+from invoicemanagement.models import Invoice, InvoiceLineItem
 
-logger = logging.getLogger(__name__)
+# --- 1. Data Schema ---
+class InvoiceEntry(BaseModel):
+    description: str
+    amt: float 
 
+class InvoiceData(BaseModel):
+    invoiceNo: Optional[str] = None
+    invoicedate: Optional[str] = None
+    totalAmount: Optional[float] = None
+    invoice_entries: List[InvoiceEntry] = Field(default_factory=list)
 
-class InvoiceParsingService:
-    """Service for parsing invoice documents and extracting structured data"""
+# --- 2. Graph State ---
+class GraphState(TypedDict):
+    file_path: str
+    file_type: str  # 'text'
+    content: str    # Raw extracted text only
+    structured_data: Optional[InvoiceData]
+    error: Optional[str]
+
+# --- 3. The Extraction Node ---
+def extract_invoice_info(state: GraphState):
+    # --- AWS CREDENTIALS ---
+    ACCESS_KEY = getattr(settings, 'AWS_ACCESS_KEY_ID', os.getenv('AWS_ACCESS_KEY_ID'))
+    SECRET_KEY = getattr(settings, 'AWS_SECRET_ACCESS_KEY', os.getenv('AWS_SECRET_ACCESS_KEY'))
+    REGION = getattr(settings, 'AWS_REGION', os.getenv('AWS_REGION', 'us-east-1'))
+    if not ACCESS_KEY or not SECRET_KEY:
+        return {"error": "AWS credentials not configured", "structured_data": None}
+
+    llm = ChatBedrock(
+        model_id="anthropic.claude-3-sonnet-20240229-v1:0",
+        aws_access_key_id=ACCESS_KEY,
+        aws_secret_access_key=SECRET_KEY,
+        region_name=REGION,
+        model_kwargs={"temperature": 0, "max_tokens": 4096}
+    )
     
-    INVOICE_PROMPT_TEMPLATE = """You are an expert invoice parser. Your task is to extract ALL structured data from the provided raw invoice text.
+    prompt_text = f"""
+    You are an expert financial invoice extraction assistant.
+    Extract structured information from provided invoice.
 
-===============================
-\u0012 LOCK CORE INSTRUCTIONS
-===============================
-1. Extract EVERY piece of information explicitly present in the invoice.
-2. DO NOT hallucinate, infer, or guess any values.
-3. If a value is not clearly present, return null.
-4. DO NOT omit any fields.
+    CRITICAL REQUIREMENTS:
+    1. Extract invoice number and Invoice date.
+    2. Extract ALL transactions found in invoice.
+    3. For EACH invoice, you MUST include: date, description, amount.
+    4. Use YYYY-MM-DD format for all dates.
+    5. Return ONLY valid JSON, no markdown formatting.
+    6. Compute total amount by adding amt of each invoice entry.
 
-===============================
-\ud83d\udcd0 STRUCTURE RULES (CRITICAL)
-===============================
-5. Keep the JSON structure FLAT at the top level.
-6. DO NOT create nested objects EXCEPT for:
-   - "line_items"
-   - "charges"
-7. Use consistent snake_case keys.
-8. ALWAYS include the required fields listed below (even if null).
+    REQUIRED JSON STRUCTURE:
+    {{
+        "invoiceNo": "string",
+        "invoicedate": "YYYY-MM-DD",
+        "totalAmount": 0.00,
+        "invoice_entries": [
+            {{
+                "description": "item description",
+                "amt": 0.00
+            }}
+        ]
+    }}
 
-===============================
-\ud83d\udd25 REQUIRED STANDARD FIELDS
-===============================
-You MUST include these fields in every output:
 
-- "invoice_number"
-- "invoice_date"
-- "due_date"
+    Here is invoice text to process:
+    ---
+    {state['content']}
+    ---
 
-- "subtotal"
-- "tax_amount"
-- "shipping_amount"
-- "discount_amount"
-
-- "total_amount"
-
-===============================
-\ud83d\udcb0 NEW: CHARGES ARRAY (VERY IMPORTANT)
-===============================
-9. You MUST extract ALL monetary components contributing to the final total into a field called:
-
-"charges": [
-  {
-    "type": "string",
-    "amount": number
-  }
-]
-
-RULES:
-- Include ALL charges, fees, taxes, discounts, reversals
-- Each entry must represent ONE monetary component
-- Use NEGATIVE values for:
-  - discounts
-  - refunds
-  - reversals
-- DO NOT duplicate values
-- DO NOT include subtotal as a charge if line items are already present
-- Ensure:
-    sum(charges.amount) == total_amount (very important)
-
-Examples of types:
-- "cab_hire"
-- "driver_charges"
-- "service_fee"
-- "tax"
-- "shipping"
-- "discount"
-- "reversal"
-
-===============================
-\ud83e\udde0 FLEXIBLE EXTRACTION (VERY IMPORTANT)
-===============================
-10. In addition to required fields:
-   - Extract ALL other fields present in the invoice
-   - Use meaningful snake_case keys
-   - DO NOT drop any useful information
-
-===============================
-\ud83d\udcb0 FINANCIAL NORMALIZATION (CRITICAL)
-===============================
-11. Normalize financial fields strictly:
-
-- "subtotal" \u2192 SUM of (quantity \u00d7 unit_price) for all items (EXCLUDING tax, shipping, discount)
-- "tax_amount" \u2192 TOTAL tax for the invoice
-- "shipping_amount" \u2192 delivery/shipping charges
-- "discount_amount" \u2192 discount
-- "total_amount" \u2192 FINAL payable amount
-
-\ud83d\udea8 IMPORTANT RULE:
-total_amount MUST satisfy:
-total_amount = subtotal + tax_amount + shipping_amount - discount_amount
-
-12. DO NOT mix tax into subtotal or unit_price.
-
-13. If invoice shows "price including tax":
-   \u2192 Extract base price into unit_price
-   \u2192 Extract tax separately into tax_amount
-
-===============================
-\ud83d\udce6 LINE ITEMS (STRICT)
-===============================
-14. Use "line_items" as array of objects
-
-15. Each item MUST include:
-   - description
-   - quantity
-   - unit_price (price BEFORE tax)
-   - tax_amount (tax for that item, if available else null)
-   - total (quantity \u00d7 unit_price ONLY, EXCLUDING tax)
-
-\ud83d\udea8 IMPORTANT:
-- item.total MUST NOT include tax
-- item.total = quantity \u00d7 unit_price
-
-16. TAX HANDLING:
-- If item-level tax exists \u2192 store in item.tax_amount
-- If only invoice-level tax exists \u2192 keep item.tax_amount = null
-
-17. DO NOT distribute tax unless explicitly shown.
-
-===============================
-\ud83d\udd22 NUMERIC RULES
-===============================
-18. All numeric values must be pure numbers:
-   \u274c No currency symbols
-   \u274c No text like "(21%)"
-
-===============================
-\ud83d\udce4 OUTPUT RULES
-===============================
-19. Output strictly valid JSON
-20. No explanation, only JSON
-21. Return ONLY ONE JSON object
-
-===============================
-\ud83d\udcc4 RAW INPUT
-===============================
-Raw Invoice Text:
-"""
+    Return only the JSON response:"""
     
-    def __init__(self, document: Document):
-        self.document = document
-        self.extracted_text = document.extracted_text or ""
+    # Always send raw extracted text to LLM.
+    message_content = [
+        {"type": "text", "text": prompt_text}
+    ]
     
-    def parse_invoice(self) -> Dict[str, Any]:
-        """
-        Parse invoice and return structured JSON data
-        """
-        try:
-            # Log parsing start
-            self._log_step('invoice_parsing', 'started', 'Starting invoice parsing')
-            
-            if not self.extracted_text:
-                raise ValueError("No text available for parsing")
-            
-            # Get LLM instance
-            llm = self._get_llm()
-            
-            # Create prompt
-            prompt = self.INVOICE_PROMPT_TEMPLATE + f"\n{self.extracted_text}"
-            
-            # Invoke LLM
-            response = llm.invoke(prompt)
-            content = response.content.strip()
-            
-            # Clean up possible markdown wrappers
-            if content.startswith("```json"):
-                content = content[7:]
-            if content.startswith("```"):
-                content = content[:-3]
-            
-            # Parse JSON
-            invoice_data = json.loads(content)
-            
-            # Validate and normalize the parsed data
-            validated_data = self._validate_invoice_data(invoice_data)
-            
-            # Log parsing completion
-            self._log_step('invoice_parsing', 'completed', f"Successfully parsed invoice with {len(validated_data)} fields")
-            
-            return validated_data
-            
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON parsing failed for invoice {self.document.id}: {e}")
-            self._log_step('invoice_parsing', 'failed', f"JSON parsing failed: {str(e)}", str(e))
-            raise
-            
-        except Exception as e:
-            logger.error(f"Invoice parsing failed for document {self.document.id}: {e}")
-            self._log_step('invoice_parsing', 'failed', f"Invoice parsing failed: {str(e)}", str(e))
-            raise
-    
-    def _validate_invoice_data(self, invoice_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Validate and normalize invoice data
-        """
-        try:
-            # Ensure required fields exist
-            required_fields = [
-                'invoice_number', 'invoice_date', 'due_date',
-                'subtotal', 'tax_amount', 'shipping_amount', 
-                'discount_amount', 'total_amount'
-            ]
-            
-            validated_data = invoice_data.copy()
-            
-            # Add missing required fields with null values
-            for field in required_fields:
-                if field not in validated_data:
-                    validated_data[field] = None
-            
-            # Normalize numeric fields
-            numeric_fields = ['subtotal', 'tax_amount', 'shipping_amount', 'discount_amount', 'total_amount']
-            for field in numeric_fields:
-                if validated_data[field] is not None:
-                    try:
-                        # Convert to float, removing any currency symbols or formatting
-                        value = str(validated_data[field]).replace('$', '').replace(',', '').strip()
-                        validated_data[field] = float(value)
-                    except (ValueError, TypeError):
-                        validated_data[field] = None
-            
-            # Validate line items if present
-            if 'line_items' in validated_data and isinstance(validated_data['line_items'], list):
-                validated_line_items = []
-                for item in validated_data['line_items']:
-                    if isinstance(item, dict):
-                        # Ensure required item fields
-                        item_fields = ['description', 'quantity', 'unit_price', 'tax_amount', 'total']
-                        validated_item = item.copy()
-                        
-                        for field in item_fields:
-                            if field not in validated_item:
-                                validated_item[field] = None
-                        
-                        # Normalize numeric item fields
-                        item_numeric_fields = ['quantity', 'unit_price', 'tax_amount', 'total']
-                        for field in item_numeric_fields:
-                            if validated_item[field] is not None:
-                                try:
-                                    value = str(validated_item[field]).replace('$', '').replace(',', '').strip()
-                                    validated_item[field] = float(value)
-                                except (ValueError, TypeError):
-                                    validated_item[field] = None
-                        
-                        validated_line_items.append(validated_item)
-                
-                validated_data['line_items'] = validated_line_items
-            
-            # Validate charges array if present
-            if 'charges' in validated_data and isinstance(validated_data['charges'], list):
-                validated_charges = []
-                for charge in validated_data['charges']:
-                    if isinstance(charge, dict):
-                        # Ensure required charge fields
-                        charge_fields = ['type', 'amount']
-                        validated_charge = charge.copy()
-                        
-                        for field in charge_fields:
-                            if field not in validated_charge:
-                                validated_charge[field] = None
-                        
-                        # Normalize amount
-                        if validated_charge['amount'] is not None:
-                            try:
-                                value = str(validated_charge['amount']).replace('$', '').replace(',', '').strip()
-                                validated_charge['amount'] = float(value)
-                            except (ValueError, TypeError):
-                                validated_charge['amount'] = None
-                        
-                        validated_charges.append(validated_charge)
-                
-                validated_data['charges'] = validated_charges
-            
-            return validated_data
-            
-        except Exception as e:
-            logger.error(f"Data validation failed: {e}")
-            # Return original data if validation fails
-            return invoice_data
-    
-    def _get_llm(self):
-        """Get LLM instance (reuse classification service method)"""
-        classification_service = ClassificationService(self.document)
-        return classification_service._get_llm()
-    
-    def _log_step(self, step_name: str, status: str, description: str, error_message: str = None):
-        """Log processing step"""
-        try:
-            ProcessingLog.objects.create(
-                document=self.document,
-                step_name=step_name,
-                step_description=description,
-                status=status,
-                started_at=timezone.now(),
-                error_message=error_message
+    try:
+        response = llm.invoke([HumanMessage(content=message_content)])
+        raw_output = response.content
+        if isinstance(raw_output, list):
+            raw_output = "".join(
+                block.get("text", "") if isinstance(block, dict) else str(block)
+                for block in raw_output
             )
-        except Exception as e:
-            logger.error(f"Failed to log processing step: {e}")
+        else:
+            raw_output = str(raw_output)
+        
+        # Strip markdown if present
+        json_str = re.sub(r"```json\s*|```\s*", "", raw_output).strip()
+        data_dict = json.loads(json_str)
+        
+        validated_data = InvoiceData(**data_dict)
+        return {"structured_data": validated_data, "error": None}
+    except Exception as e:
+        return {"error": f"LLM Extraction Error: {str(e)}", "structured_data": None}
 
+# --- 4. Graph Assembly ---
+workflow = StateGraph(GraphState)
+workflow.add_node("extract", extract_invoice_info)
+workflow.set_entry_point("extract")
+workflow.add_edge("extract", END)
+app = workflow.compile()
 
-def parse_invoice(document: Document) -> Dict[str, Any]:
+# --- 5. File Processing Logic ---
+def extract_text_from_file(file_path: str) -> str:
+    """Extract text content from various file formats"""
+    file_ext = file_path.lower().split('.')[-1]
+    
+    try:
+        # 1. Handle PDF with PyPDF2 and extract raw text
+        if file_ext == 'pdf':
+            reader = PdfReader(file_path)
+            text_parts = []
+            for page in reader.pages:
+                text_parts.append(page.extract_text() or "")
+            return "\n".join(text_parts).strip()
+
+        # 2. Handle images with pytesseract OCR and extract raw text
+        elif file_ext in ['jpg', 'jpeg', 'png', 'bmp', 'tiff', 'tif', 'webp']:
+            image = Image.open(file_path)
+            return pytesseract.image_to_string(image).strip()
+
+        # 3. Handle Structured Data (Excel/CSV as text) via pandas
+        elif file_ext in ['xlsx', 'xls', 'csv']:
+            df = pd.read_excel(file_path) if 'xls' in file_ext else pd.read_csv(file_path)
+            return df.fillna('').to_string()
+
+        # 4. Handle Raw Text
+        else:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                return f.read()
+    except Exception as e:
+        raise Exception(f"Error reading file {file_path}: {str(e)}")
+
+def process_invoice_file(file_path: str):
+    """Process invoice file and return structured data"""
+    print(f"📂 Processing File: {file_path}...")
+    
+    try:
+        # Extract text content
+        text_content = extract_text_from_file(file_path)
+        
+        if not text_content.strip():
+            raise ValueError("No text content extracted from file")
+        
+        # Prepare state for graph
+        state_input = {
+            "content": text_content, 
+            "file_type": 'text', 
+            "file_path": file_path
+        }
+
+        # Run Graph
+        output = app.invoke(state_input)
+        
+        if output.get("error"):
+            print(f"❌ Error: {output['error']}")
+            return {"success": False, "error": output['error']}
+        else:
+            data = output["structured_data"]
+            print(f"✅ Success!")
+            print(json.dumps(data.model_dump(), indent=2))
+            return {"success": True, "data": data.model_dump()}
+            
+    except Exception as e:
+        print(f"❌ System Error: {str(e)}")
+        return {"success": False, "error": str(e)}
+
+def log_processing_step(document: Document, step_name: str, status: str, 
+                       error_message: str = None, duration: float = None):
+    """Log processing steps for debugging and monitoring"""
+    ProcessingLog.objects.create(
+        document=document,
+        step_name=step_name,
+        step_description=f"Processing step: {step_name}",
+        status=status,
+        started_at=datetime.now(),
+        completed_at=datetime.now() if status in ['completed', 'failed'] else None,
+        duration=duration,
+        error_message=error_message
+    )
+
+@transaction.atomic
+def save_invoice_data(document: Document, invoice_data: InvoiceData) -> Invoice:
+    """Save extracted invoice data to database"""
+    from datetime import datetime
+    
+    # Create Invoice record
+    invoice = Invoice.objects.create(
+        document=document,
+        invoiceNo=invoice_data.invoiceNo,
+        totalAmount=invoice_data.totalAmount,
+        status='processed',
+        extraction_method='langchain'
+    )
+    
+    # Parse date if available
+    if invoice_data.invoicedate:
+        try:
+            invoice_date = datetime.strptime(invoice_data.invoicedate, '%Y-%m-%d').date()
+            invoice.invoicedate = invoice_date
+        except ValueError:
+            # If date parsing fails, leave as None
+            pass
+    
+    invoice.save()
+    
+    # Create InvoiceLineItem records
+    for entry_data in invoice_data.invoice_entries:
+        InvoiceLineItem.objects.create(
+            invoice=invoice,
+            description=entry_data.description,
+            amt=entry_data.amt
+        )
+    
+    return invoice
+
+def process_invoice(document: Document) -> dict:
     """
-    Convenience function to parse an invoice document
+    Main function to process an invoice document
     """
-    service = InvoiceParsingService(document)
-    return service.parse_invoice()
+    result = {
+        'success': False,
+        'error': None,
+        'data': None
+    }
+    
+    try:
+        # Log processing start
+        log_processing_step(document, 'invoice_processing', 'started')
+        
+        # Extract text from file
+        file_content = extract_text_from_file(document.file.path)
+        
+        if not file_content.strip():
+            raise ValueError("No text content extracted from file")
+        
+        # Prepare state for graph
+        state_input = {
+            "content": file_content, 
+            "file_type": 'text', 
+            "file_path": document.file.path
+        }
+
+        # Run Graph
+        output = app.invoke(state_input)
+        
+        if output.get("error"):
+            result['error'] = output['error']
+            log_processing_step(document, 'invoice_processing', 'failed', output['error'])
+            document.status = Document.StatusChoices.FAILED
+            document.error_message = output['error']
+            document.save()
+            return result
+        
+        # Save to database
+        invoice_data = output["structured_data"]
+        saved_invoice = save_invoice_data(document, invoice_data)
+        
+        # Log success
+        log_processing_step(document, 'invoice_processing', 'completed')
+        
+        result.update({
+            'success': True,
+            'data': invoice_data.model_dump(),
+            'invoice_id': saved_invoice.id
+        })
+        
+    except Exception as e:
+        error_msg = f"Processing error: {str(e)}"
+        result['error'] = error_msg
+        log_processing_step(document, 'invoice_processing', 'failed', error_msg)
+        
+        document.status = Document.StatusChoices.FAILED
+        document.error_message = error_msg
+        document.save()
+    
+    return result
+
+# --- 6. Main Entry Point ---
+if __name__ == "__main__":
+    # Specify your invoice path here
+    target_file = "invoice.pdf" 
+    process_invoice_file(target_file)
