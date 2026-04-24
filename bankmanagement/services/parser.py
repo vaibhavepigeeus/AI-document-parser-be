@@ -1,7 +1,7 @@
 import logging
 from document.models import Document
 from bankmanagement.services.bank_statement_parser import process_bank_statement
-
+from bankmanagement.services.invoice_parsing import process_invoice
 logger = logging.getLogger(__name__)
 
 
@@ -42,14 +42,24 @@ def run_parser():
                     result = process_bank_statement(document)
                 elif document.document_type == Document.DocumentType.INVOICE:
                     logger.info(f"Running invoice parser for: {document.filename}")
-                    # TODO: Implement invoice parser call when available
-                    # from invoicemanagement.services.invoice_parser import process_invoice_document
-                    # result = process_invoice_document(document)
-                    
-                    # For now, just mark as processed
-                    document.status = Document.StatusChoices.PARSED
-                    document.save()
-                    result = {'success': True, 'message': 'Invoice processing not yet implemented'}
+                    try:
+                        invoice_result = process_invoice(document)
+                        
+                        if invoice_result.get('success'):
+                            result = {
+                                'success': True, 
+                                'message': 'Invoice processed successfully',
+                                'data': invoice_result.get('data'),
+                                'invoice_id': invoice_result.get('invoice_id')
+                            }
+                        else:
+                            result = {'success': False, 'error': invoice_result.get('error')}
+                    except Exception as e:
+                        logger.error(f"Invoice parsing failed for {document.filename}: {e}")
+                        document.status = Document.StatusChoices.FAILED
+                        document.error_message = str(e)
+                        document.save()
+                        result = {'success': False, 'error': str(e)}
                 else:
                     logger.warning(f"Unknown document type: {document.document_type}")
                     document.status = Document.StatusChoices.FAILED
