@@ -36,9 +36,12 @@ class BankStatement(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
-    account_holder_name = models.CharField(max_length=255)
-    number_of_txn = models.PositiveIntegerField()
-    total_credit_amount = models.DecimalField(max_digits=15, decimal_places=2)
+    account_holder_name = models.CharField(max_length=255, null=True,
+        blank=True)
+    number_of_txn = models.PositiveIntegerField(null=True,
+        blank=True)
+    total_credit_amount = models.DecimalField(max_digits=15, decimal_places=2,  null=True,
+        blank=True)
     total_debit_amount = models.DecimalField(
         max_digits=15, 
         decimal_places=2, 
@@ -88,8 +91,10 @@ class BankTransaction(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
-    balance = models.DecimalField(max_digits=15, decimal_places=2)
-    credit = models.DecimalField(max_digits=15, decimal_places=2)
+    balance = models.DecimalField(max_digits=15, decimal_places=2,  null=True,
+        blank=True)
+    credit = models.DecimalField(max_digits=15, decimal_places=2,  null=True,
+        blank=True)
     debit = models.DecimalField(
         max_digits=15,
         decimal_places=2,
@@ -101,7 +106,8 @@ class BankTransaction(models.Model):
         null=True,
         blank=True
     )
-    total_credit_amount = models.DecimalField(max_digits=15, decimal_places=2)
+    total_credit_amount = models.DecimalField(max_digits=15, decimal_places=2,  null=True,
+        blank=True)
     total_debit_amount = models.DecimalField(
         max_digits=15,
         decimal_places=2,
