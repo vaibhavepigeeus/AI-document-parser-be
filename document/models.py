@@ -98,3 +98,24 @@ class ProcessingLog(models.Model):
         
     def __str__(self):
         return f"{self.step_name} for {self.document.filename}"
+
+
+class Reconciliation(models.Model):
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('matched', 'Matched'),
+        ('failed', 'Failed'),
+        ('manual_review', 'Manual Review'),
+    ]
+    
+    invoice = models.ForeignKey('invoicemanagement.Invoice', on_delete=models.CASCADE, related_name='reconciliation_records')
+    payment_advice = models.ForeignKey('paymentadvice.PaymentAdvice', on_delete=models.CASCADE)
+    bank_transaction = models.ForeignKey('bankmanagement.BankTransaction', on_delete=models.CASCADE)
+    
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    reconciliation_date = models.DateTimeField(auto_now_add=True)
+    
+    # Store matching results for audit
+    amount_variance = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+    matching_confidence = models.FloatField(null=True, blank=True)
+    notes = models.TextField(null=True, blank=True)

@@ -7,10 +7,14 @@ from django.db import transaction
 from django.utils import timezone
 import logging
 
-from .models import Document, ProcessingResult
+from .models import Document, ProcessingResult, Reconciliation
+from invoicemanagement.models import Invoice
+from bankmanagement.models import BankTransaction
 from .serializers import (
     DocumentSerializer, DocumentUploadSerializer, 
-    DocumentDetailSerializer, ProcessingResultSerializer
+    DocumentDetailSerializer, ProcessingResultSerializer,
+    ReconciliationListSerializer, UnreconciledInvoiceSerializer,
+    UnreconciledBankTransactionSerializer
 )
 
 logger = logging.getLogger(__name__)
@@ -140,3 +144,111 @@ def processing_status(request, document_id):
         ]
     
     return Response(response_data)
+
+
+@api_view(['GET'])
+# @permission_classes([permissions.IsAuthenticated])
+def reconciliation_list(request):
+    """API endpoint for comprehensive reconciliation list"""
+    
+    result = []
+    
+    # Get reconciled items (invoice + transaction combined)
+    reconciled_records = Reconciliation.objects.select_related(
+        'invoice', 'payment_advice', 'bank_transaction'
+    ).all()
+    
+    for record in reconciled_records:
+        combined_item = {
+            # Invoice details
+            "Invoice": record.invoice.invoiceNo if record.invoice else None,
+            "InvoiceDate": record.invoice.invoicedate if record.invoice else None,
+            "invoiceAmt": float(record.invoice.totalAmount) if record.invoice and record.invoice.totalAmount else None,
+            "invoiceAging": 0,  # Static aging for invoice
+            
+            # Reconciliation details
+            "reconciliation_status": record.status,
+            "reconciliation_date": record.reconciliation_date.isoformat() if record.reconciliation_date else None,
+            "amount_variance": float(record.amount_variance) if record.amount_variance else None,
+            "matching_confidence": record.matching_confidence,
+            "notes": record.notes,
+            
+            # Transaction details (only if matched)
+            "TransactionID": record.bank_transaction.id if record.bank_transaction else None,
+            "TransactionDate": record.bank_transaction.transaction_date if record.bank_transaction else None,
+            "txn_no": record.bank_transaction.txn_no if record.bank_transaction else None,
+            "transaction_amount": float(record.bank_transaction.amount) if record.bank_transaction and record.bank_transaction.amount else None,
+            "transaction_type": record.bank_transaction.transaction_type if record.bank_transaction else None,
+            "description": record.bank_transaction.description if record.bank_transaction else None,
+            "account_number": record.bank_transaction.bank_statement.account_number if record.bank_transaction and record.bank_transaction.bank_statement else None,
+            "txnAging": 0,  # Static aging for transaction
+        }
+        result.append(combined_item)
+    
+    # Get unreconciled invoices (invoice only)
+    reconciled_invoice_ids = reconciled_records.values_list('invoice__id', flat=True)
+    unreconciled_invoices = Invoice.objects.filter(
+        reconciliation_status='unreconciled'
+    ).exclude(
+        id__in=reconciled_invoice_ids
+    )
+    
+    for invoice in unreconciled_invoices:
+        invoice_item = {
+            # Invoice details only
+            "Invoice": invoice.invoiceNo,
+            "InvoiceDate": invoice.invoicedate,
+            "invoiceAmt": float(invoice.totalAmount) if invoice.totalAmount else None,
+            "invoiceAging": 0,  # Static aging for invoice
+            "reconciliation_status": invoice.reconciliation_status,
+            
+            # No transaction details (null values)
+            "reconciliation_date": None,
+            "amount_variance": None,
+            "matching_confidence": None,
+            "notes": None,
+            "TransactionID": None,
+            "TransactionDate": None,
+            "txn_no": None,
+            "transaction_amount": None,
+            "transaction_type": None,
+            "description": None,
+            "account_number": None,
+            "txnAging": 0,  # Static aging for transaction
+        }
+        result.append(invoice_item)
+    
+    # Get unreconciled bank transactions (transaction only)
+    reconciled_transaction_ids = reconciled_records.values_list('bank_transaction__id', flat=True)
+    unreconciled_transactions = BankTransaction.objects.select_related(
+        'bank_statement'
+    ).exclude(
+        id__in=reconciled_transaction_ids
+    )
+    
+    for transaction in unreconciled_transactions:
+        transaction_item = {
+            # Transaction details only
+            "TransactionID": transaction.id,
+            "TransactionDate": transaction.transaction_date,
+            "txn_no": transaction.txn_no,
+            "transaction_amount": float(transaction.amount) if transaction.amount else None,
+            "transaction_type": transaction.transaction_type,
+            "description": transaction.description,
+            "account_number": transaction.bank_statement.account_number if transaction.bank_statement else None,
+            "txnAging": 0,  # Static aging for transaction
+            
+            # No invoice details (null values)
+            "Invoice": None,
+            "InvoiceDate": None,
+            "invoiceAmt": None,
+            "invoiceAging": 0,  # Static aging for invoice
+            "reconciliation_status": None,
+            "reconciliation_date": None,
+            "amount_variance": None,
+            "matching_confidence": None,
+            "notes": None,
+        }
+        result.append(transaction_item)
+    
+    return Response(result)

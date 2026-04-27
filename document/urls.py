@@ -10,4 +10,5 @@ urlpatterns = [
     path('<int:document_id>/reprocess/', views.reprocess_document, name='document-reprocess'),
     path('<int:document_id>/delete/', views.delete_document, name='document-delete'),
     path('<int:document_id>/status/', views.processing_status, name='processing-status'),
+    path('reconciliation/', views.reconciliation_list, name='reconciliation-list'),
 ]

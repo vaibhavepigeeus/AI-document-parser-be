@@ -6,6 +6,7 @@ class BankTransactionInline(admin.TabularInline):
     model = BankTransaction
     extra = 0
     readonly_fields = ('created_at', 'updated_at')
+    fields = ('txn_no', 'transaction_date', 'description', 'amount', 'transaction_type')
 
 
 @admin.register(BankStatement)
@@ -38,14 +39,14 @@ class BankStatementAdmin(admin.ModelAdmin):
 
 @admin.register(BankTransaction)
 class BankTransactionAdmin(admin.ModelAdmin):
-    list_display = ['bank_statement', 'transaction_date', 'description', 'amount', 'transaction_type', 'created_at']
+    list_display = ['bank_statement', 'txn_no', 'transaction_date', 'description', 'amount', 'transaction_type', 'created_at']
     list_filter = ['transaction_type', 'transaction_date', 'created_at']
-    search_fields = ['description', 'reference_number', 'payee']
+    search_fields = ['description', 'reference_number', 'payee', 'txn_no']
     readonly_fields = ('created_at', 'updated_at')
     
     fieldsets = (
         ('Transaction Details', {
-            'fields': ('bank_statement', 'transaction_date', 'description', 'amount', 'transaction_type')
+            'fields': ('bank_statement', 'txn_no', 'transaction_date', 'description', 'amount', 'transaction_type')
         }),
         ('Additional Information', {
             'fields': ('reference_number', 'balance_after_transaction', 'category', 'payee')

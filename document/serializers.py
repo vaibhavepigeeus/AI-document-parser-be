@@ -1,5 +1,7 @@
 from rest_framework import serializers
-from .models import Document, ProcessingResult, ProcessingLog
+from .models import Document, ProcessingResult, Reconciliation, ProcessingLog
+from invoicemanagement.models import Invoice
+from bankmanagement.models import BankTransaction
 
 
 class DocumentSerializer(serializers.ModelSerializer):
@@ -85,3 +87,46 @@ class DocumentDetailSerializer(serializers.ModelSerializer):
             'id', 'filename', 'document_type', 'file', 'file_path', 'status',
             'uploaded_at', 'updated_at', 'error_message', 'parsed_data'
         ]
+
+
+class ReconciliationListSerializer(serializers.ModelSerializer):
+    """Serializer for Reconciliation list API"""
+    
+    Invoice = serializers.CharField(source='invoice.invoiceNo')
+    InvoiceDate = serializers.DateField(source='invoice.invoicedate')
+    amount = serializers.DecimalField(source='invoice.totalAmount', max_digits=15, decimal_places=2)
+    reconciliation_status = serializers.CharField(source='status')
+    
+    class Meta:
+        model = Reconciliation
+        fields = [
+            'Invoice', 'InvoiceDate', 'amount', 'reconciliation_status', 'reconciliation_date',
+            'amount_variance', 'matching_confidence', 'notes'
+        ]
+
+
+class UnreconciledInvoiceSerializer(serializers.ModelSerializer):
+    """Serializer for unreconciled invoices"""
+    
+    Invoice = serializers.CharField(source='invoiceNo')
+    InvoiceDate = serializers.DateField(source='invoicedate')
+    amount = serializers.DecimalField(source='totalAmount', max_digits=15, decimal_places=2)
+    reconciliation_status = serializers.CharField(source='reconciliation_status')
+    
+    class Meta:
+        model = Invoice
+        fields = ['Invoice', 'InvoiceDate', 'amount', 'reconciliation_status']
+
+
+class UnreconciledBankTransactionSerializer(serializers.ModelSerializer):
+    """Serializer for unreconciled bank transactions"""
+    
+    TransactionID = serializers.CharField(source='id')
+    TransactionDate = serializers.DateField(source='transaction_date')
+    amount = serializers.DecimalField(max_digits=15, decimal_places=2)
+    transaction_type = serializers.CharField()
+    description = serializers.CharField()
+    
+    class Meta:
+        model = BankTransaction
+        fields = ['TransactionID', 'TransactionDate', 'amount', 'transaction_type', 'description']

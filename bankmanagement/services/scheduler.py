@@ -7,6 +7,7 @@ import logging
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from bankmanagement.services.parser import run_parser
+from bankmanagement.services.reconcilation import run_reconcilation
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +18,7 @@ def run():
     """
     scheduler = BackgroundScheduler()
     scheduler.add_job(run_parser, "interval", seconds=60)
+    scheduler.add_job(run_reconcilation, "interval", seconds=60)
     scheduler.start()
     logger.info("Background scheduler started with 60-second interval")
     return scheduler
