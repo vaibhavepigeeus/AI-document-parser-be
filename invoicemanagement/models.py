@@ -28,6 +28,28 @@ class Invoice(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
 
+    # Reconciliation status
+    RECONCILIATION_STATUS_CHOICES = [
+        ('unreconciled', 'Unreconciled'),
+        ('matched', 'Matched'),
+        ('manual_review', 'Manual Review'),
+        ('failed', 'Failed'),
+    ]
+    
+    reconciliation_status = models.CharField(
+        max_length=20,
+        choices=RECONCILIATION_STATUS_CHOICES,
+        default='unreconciled'
+    )
+    
+    reconciliation = models.ForeignKey(
+        'document.Reconciliation',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='invoice_reconciliation'
+    )
+
     def __str__(self):
         return f"Invoice - {self.invoiceNo or 'Unknown'} ({self.invoicedate or 'N/A'})"
     

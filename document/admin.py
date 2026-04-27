@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Document, ProcessingResult, ProcessingLog
+from .models import Document, ProcessingResult, ProcessingLog, Reconciliation
 
 
 @admin.register(Document)
@@ -64,3 +64,28 @@ class ProcessingLogAdmin(admin.ModelAdmin):
             'fields': ('error_message', 'error_traceback')
         }),
     )
+
+
+@admin.register(Reconciliation)
+class ReconciliationAdmin(admin.ModelAdmin):
+    list_display = ['invoice', 'payment_advice', 'bank_transaction', 'status', 'reconciliation_date', 'amount_variance']
+    list_filter = ['status', 'reconciliation_date']
+    search_fields = ['invoice__invoiceNo', 'payment_advice__payment_invoice_no', 'notes']
+    readonly_fields = ['id', 'reconciliation_date']
+    
+    fieldsets = (
+        ('Basic Information', {
+            'fields': ('invoice', 'payment_advice', 'bank_transaction', 'status')
+        }),
+        ('Reconciliation Details', {
+            'fields': ('reconciliation_date', 'amount_variance', 'matching_confidence')
+        }),
+        ('Notes', {
+            'fields': ('notes',)
+        }),
+    )
+    
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related(
+            'invoice', 'payment_advice', 'bank_transaction'
+        )

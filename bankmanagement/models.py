@@ -73,6 +73,7 @@ class BankTransaction(models.Model):
     bank_statement = models.ForeignKey(BankStatement, on_delete=models.CASCADE, related_name='transactions')
     
     # Transaction details
+    txn_no = models.CharField(max_length=100, blank=True, null=True)
     transaction_date = models.DateField()
     description = models.TextField()
     amount = models.DecimalField(max_digits=15, decimal_places=2)

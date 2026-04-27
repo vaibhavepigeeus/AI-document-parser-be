@@ -45,7 +45,8 @@ INSTALLED_APPS = [
     'corsheaders',
     'bankmanagement',
     'document',
-    'invoicemanagement'
+    'invoicemanagement',
+    'paymentadvice'
 ]
 
 MIDDLEWARE = [
@@ -206,6 +207,11 @@ LOGGING = {
             'propagate': False,
         },
         'bankmanagement.services.parser': {
+            'handlers': ['console', 'file'],
+            'level': 'DEBUG',
+            'propagate': False,
+        },
+        'bankmanagement.services.reconcilation': {
             'handlers': ['console', 'file'],
             'level': 'DEBUG',
             'propagate': False,
