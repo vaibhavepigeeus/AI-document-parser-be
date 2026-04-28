@@ -157,7 +157,11 @@ def determine_transaction_type(transaction: Transaction) -> str:
     else:
         return 'other'
 
-@transaction.atomic
+def generate_txn_no(transaction_id: int) -> str:
+    """Generate unique transaction number based on internal ID"""
+    return f"TXN-{transaction_id:04d}"
+
+@transaction.atomic 
 def save_bank_statement_data(document: Document, statement_data: BankStatementData) -> BankStatement:
     """Save extracted bank statement data to database"""
     
@@ -184,7 +188,8 @@ def save_bank_statement_data(document: Document, statement_data: BankStatementDa
         
         transaction_type = determine_transaction_type(txn_data)
         
-        BankTransaction.objects.create(
+        # Create transaction first to get the ID, then update with generated txn_no
+        transaction = BankTransaction.objects.create(
             bank_statement=bank_statement,
             transaction_date=transaction_date,
             description=txn_data.description,
@@ -197,6 +202,10 @@ def save_bank_statement_data(document: Document, statement_data: BankStatementDa
             balance=txn_data.balance,
             reference=txn_data.reference
         )
+        
+        # Generate and update transaction number
+        transaction.txn_no = generate_txn_no(transaction.id)
+        transaction.save(update_fields=['txn_no'])
     
     return bank_statement
 

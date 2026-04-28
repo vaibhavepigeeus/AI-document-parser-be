@@ -27,8 +27,10 @@ def run_reconcilation():
     logger.info("Starting reconciliation process")
  
     # Get all invoices that haven't been reconciled yet
+    # This includes invoices with no reconciliation record OR those marked as 'unreconciled'
     unreconciled_invoices = Invoice.objects.filter(
-        reconciliation_status='unreconciled'
+        reconciliation_status='unreconciled',
+        reconciliation__isnull=True
     )
  
     total_invoices = Invoice.objects.count()
@@ -44,9 +46,9 @@ def run_reconcilation():
  
         logger.info(f"Processing invoice {invoice.invoiceNo} (ID: {invoice.id}) - Amount: {invoice.totalAmount}")
  
-        # Step 1: Find matching payment advice
+        # Step 1: Find matching payment advice (case-insensitive invoice number matching)
         matching_payment_advice = PaymentAdvice.objects.filter(
-            payment_invoice_no=invoice.invoiceNo,
+            payment_invoice_no__iexact=invoice.invoiceNo,
             total_received_amount=invoice.totalAmount
         ).first()
  
@@ -101,36 +103,21 @@ def run_reconcilation():
                 notes=f"Auto-reconciled: Invoice {invoice.invoiceNo} matched with payment advice and bank transaction"
             )
             logger.info(f"Created new reconciliation {reconciliation.id} for invoice {invoice.invoiceNo}")
- 
+
         # Update invoice reconciliation status and link
         invoice.reconciliation_status = 'matched'
         invoice.reconciliation = reconciliation if 'reconciliation' in locals() else existing_reconciliation
         invoice.save()
         logger.info(f"Updated invoice {invoice.invoiceNo} status to 'matched'")
- 
+        
+        # Update payment advice to mark as matched
+        matching_payment_advice.is_matched = True
+        matching_payment_advice.save()
+        logger.info(f"Marked payment advice {matching_payment_advice.id} as matched")
+
         reconciliations_created += 1
  
-    # Handle failed reconciliations - create records for manual review
-    failed_invoices = unreconciled_invoices.exclude(
-        invoiceNo__in=PaymentAdvice.objects.filter(
-            total_received_amount__in=[inv.totalAmount for inv in unreconciled_invoices if inv.totalAmount]
-        ).values_list('payment_invoice_no', flat=True)
-    )
- 
-    for failed_invoice in failed_invoices:
-        if failed_invoice.invoiceNo and failed_invoice.totalAmount:
-            # Only create reconciliation record if we don't have one already
-            existing_failed_reconciliation = Reconciliation.objects.filter(invoice=failed_invoice).first()
- 
-            if not existing_failed_reconciliation:
-                # Don't create reconciliation record for failed cases - just update invoice status
-                logger.warning(f"No matching payment advice found for invoice {failed_invoice.invoiceNo}")
- 
-            # Update invoice reconciliation status (but don't link to reconciliation record)
-            failed_invoice.reconciliation_status = 'manual_review'
-            failed_invoice.reconciliation = None  # Explicitly set to null
-            failed_invoice.save()
-            logger.info(f"Set invoice {failed_invoice.invoiceNo} to manual review status")
+    logger.info(f"Completed reconciliation process. {len(unreconciled_invoices)} invoices remain unreconciled (waiting for payment advice)")
  
     result = {
         'reconciliations_created': reconciliations_created,
