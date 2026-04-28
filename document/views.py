@@ -1,10 +1,12 @@
-from rest_framework import status, generics, permissions
+from rest_framework import status, generics
 from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
-from django.shortcuts import get_object_or_404
 from django.db import transaction
 from django.utils import timezone
+from django.shortcuts import get_object_or_404
+from datetime import datetime
 import logging
 
 from .models import Document, ProcessingResult, Reconciliation
@@ -19,6 +21,35 @@ from .serializers import (
 
 logger = logging.getLogger(__name__)
 
+def calculate_invoice_aging(invoice, reconciliation_date=None):
+    """Calculate aging days for an invoice"""
+    if not invoice or not invoice.created_at:
+        return 0
+    
+    if reconciliation_date:
+        # For matched invoices - age until reconciliation date
+        aging_days = (reconciliation_date.date() - invoice.created_at.date()).days
+    else:
+        # For unmatched invoices - age until today
+        aging_days = (timezone.now().date() - invoice.created_at.date()).days
+    
+    return max(0, aging_days)  # Ensure non-negative
+
+
+def calculate_transaction_aging(transaction, reconciliation_date=None):
+    """Calculate aging days for a bank transaction"""
+    if not transaction or not transaction.created_at:
+        return 0
+    
+    if reconciliation_date:
+        # For matched transactions - age until reconciliation date
+        aging_days = (reconciliation_date.date() - transaction.created_at.date()).days
+    else:
+        # For unmatched transactions - age until today
+        aging_days = (timezone.now().date() - transaction.created_at.date()).days
+    
+    return max(0, aging_days)  # Ensure non-negative
+
 
 class DocumentUploadView(generics.CreateAPIView):
     """API endpoint for uploading documents"""
@@ -30,7 +61,19 @@ class DocumentUploadView(generics.CreateAPIView):
     def perform_create(self, serializer):
         """Create document - background scheduler will handle processing"""
         with transaction.atomic():
-            # Create the document with basic info
+            # Check for duplicate filename
+            uploaded_file = serializer.validated_data.get('file')
+            if uploaded_file:
+                filename = uploaded_file.name
+                
+                # Check if document with same filename already exists
+                if Document.objects.filter(filename=filename).exists():
+                    from rest_framework.exceptions import ValidationError
+                    raise ValidationError({
+                        'file': f'Duplicate file detected. A document with filename "{filename}" already exists.'
+                    })
+            
+            # Create document with basic info
             document = serializer.save()
             
             # Set status to uploaded - background scheduler will pick this up
@@ -159,12 +202,16 @@ def reconciliation_list(request):
     ).all()
     
     for record in reconciled_records:
+        # Calculate aging for matched items (age until reconciliation date)
+        invoice_aging = calculate_invoice_aging(record.invoice, record.reconciliation_date) if record.invoice else 0
+        transaction_aging = calculate_transaction_aging(record.bank_transaction, record.reconciliation_date) if record.bank_transaction else 0
+        
         combined_item = {
             # Invoice details
             "Invoice": record.invoice.invoiceNo if record.invoice else None,
             "InvoiceDate": record.invoice.invoicedate if record.invoice else None,
             "invoiceAmt": float(record.invoice.totalAmount) if record.invoice and record.invoice.totalAmount else None,
-            "invoiceAging": 0,  # Static aging for invoice
+            "invoiceAging": invoice_aging,  # Dynamic aging for invoice
             
             # Reconciliation details
             "reconciliation_status": record.status,
@@ -181,7 +228,7 @@ def reconciliation_list(request):
             "transaction_type": record.bank_transaction.transaction_type if record.bank_transaction else None,
             "description": record.bank_transaction.description if record.bank_transaction else None,
             "account_number": record.bank_transaction.bank_statement.account_number if record.bank_transaction and record.bank_transaction.bank_statement else None,
-            "txnAging": 0,  # Static aging for transaction
+            "txnAging": transaction_aging,  # Dynamic aging for transaction
         }
         result.append(combined_item)
     
@@ -194,12 +241,15 @@ def reconciliation_list(request):
     )
     
     for invoice in unreconciled_invoices:
+        # Calculate aging for unreconciled invoice (age until today)
+        invoice_aging = calculate_invoice_aging(invoice)
+        
         invoice_item = {
             # Invoice details only
             "Invoice": invoice.invoiceNo,
             "InvoiceDate": invoice.invoicedate,
             "invoiceAmt": float(invoice.totalAmount) if invoice.totalAmount else None,
-            "invoiceAging": 0,  # Static aging for invoice
+            "invoiceAging": invoice_aging,  # Dynamic aging for invoice
             "reconciliation_status": invoice.reconciliation_status,
             
             # No transaction details (null values)
@@ -214,7 +264,7 @@ def reconciliation_list(request):
             "transaction_type": None,
             "description": None,
             "account_number": None,
-            "txnAging": 0,  # Static aging for transaction
+            "txnAging": 0,  # No transaction for invoice-only items
         }
         result.append(invoice_item)
     
@@ -227,6 +277,9 @@ def reconciliation_list(request):
     )
     
     for transaction in unreconciled_transactions:
+        # Calculate aging for unreconciled transaction (age until today)
+        transaction_aging = calculate_transaction_aging(transaction)
+        
         transaction_item = {
             # Transaction details only
             "TransactionID": transaction.id,
@@ -236,13 +289,13 @@ def reconciliation_list(request):
             "transaction_type": transaction.transaction_type,
             "description": transaction.description,
             "account_number": transaction.bank_statement.account_number if transaction.bank_statement else None,
-            "txnAging": 0,  # Static aging for transaction
+            "txnAging": transaction_aging,  # Dynamic aging for transaction
             
             # No invoice details (null values)
             "Invoice": None,
             "InvoiceDate": None,
             "invoiceAmt": None,
-            "invoiceAging": 0,  # Static aging for invoice
+            "invoiceAging": 0,  # No invoice for transaction-only items
             "reconciliation_status": None,
             "reconciliation_date": None,
             "amount_variance": None,
