@@ -1,0 +1,40 @@
+# Core Django
+Django==4.2.7
+djangorestframework==3.14.0
+django-cors-headers==4.3.1
+python-decouple==3.8
+psycopg2-binary==2.9.7
+
+# Core dependencies from original
+pandas
+python-dateutil
+python-dotenv
+
+# LLM / AI
+langchain
+langchain-google-genai
+langchain-aws
+boto3
+
+# Fuzzy matching
+rapidfuzz
+
+# PDF & Image Processing
+PyPDF2
+pdf2image
+pytesseract
+Pillow
+
+# Graph / Workflow
+langgraph
+
+# Optional but useful
+numpy
+
+# Additional Django utilities
+django-environ==0.11.2
+celery==5.3.4
+redis==5.0.1
+
+# Scheduler
+apscheduler==3.10.4
