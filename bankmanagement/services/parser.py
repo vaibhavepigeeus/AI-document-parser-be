@@ -42,24 +42,34 @@ def run_parser():
                     result = process_bank_statement(document)
                 elif document.document_type == Document.DocumentType.INVOICE:
                     logger.info(f"Running invoice parser for: {document.filename}")
-                    try:
-                        invoice_result = process_invoice(document)
-                        
-                        if invoice_result.get('success'):
-                            result = {
-                                'success': True, 
-                                'message': 'Invoice processed successfully',
-                                'data': invoice_result.get('data'),
-                                'invoice_id': invoice_result.get('invoice_id')
-                            }
-                        else:
-                            result = {'success': False, 'error': invoice_result.get('error')}
-                    except Exception as e:
-                        logger.error(f"Invoice parsing failed for {document.filename}: {e}")
-                        document.status = Document.StatusChoices.FAILED
-                        document.error_message = str(e)
-                        document.save()
-                        result = {'success': False, 'error': str(e)}
+                    
+                    # Check if invoice already exists for this document
+                    if hasattr(document, 'invoice'):
+                        logger.info(f"Invoice already exists for document: {document.filename}")
+                        result = {
+                            'success': False, 
+                            'error': 'Invoice already exists for this document',
+                            'message': 'Skipping - invoice already created'
+                        }
+                    else:
+                        try:
+                            invoice_result = process_invoice(document)
+                            
+                            if invoice_result.get('success'):
+                                result = {
+                                    'success': True, 
+                                    'message': 'Invoice processed successfully',
+                                    'data': invoice_result.get('data'),
+                                    'invoice_id': invoice_result.get('invoice_id')
+                                }
+                            else:
+                                result = {'success': False, 'error': invoice_result.get('error')}
+                        except Exception as e:
+                            logger.error(f"Invoice parsing failed for {document.filename}: {e}")
+                            document.status = Document.StatusChoices.FAILED
+                            document.error_message = str(e)
+                            document.save()
+                            result = {'success': False, 'error': str(e)}
                 else:
                     logger.warning(f"Unknown document type: {document.document_type}")
                     document.status = Document.StatusChoices.FAILED

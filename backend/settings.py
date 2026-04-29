@@ -148,6 +148,25 @@ MEDIA_ROOT = BASE_DIR / 'media'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
+# CORS settings
+# https://github.com/adamchainz/django-cors-headers
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:8080",
+    "https://7zkfjl0h-8080.use.devtunnels.ms",
+    # "https://storable-flap-confront.ngrok-free.dev"
+]
+
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https://.*\.use\.devtunnels\.ms$",
+    r"^http://localhost:8080$",
+]
+
+# Allow all origins for development (remove in production)
+CORS_ALLOW_ALL_ORIGINS = DEBUG
+
+# Allow credentials for development
+CORS_ALLOW_CREDENTIALS = True
+
 
 # Logging Configuration
 # https://docs.djangoproject.com/en/5.2/topics/logging/
@@ -188,36 +207,32 @@ LOGGING = {
             'maxBytes': 1024*1024*20,  # 20MB
             'backupCount': 10,
             'formatter': 'detailed',
+            'encoding': 'utf-8',
         },
     },
     'loggers': {
         'django': {
-            'handlers': ['console', 'file'],
+            'handlers': ['file'],
             'level': 'INFO',
             'propagate': True,
         },
-        'bankmanagement.services.bank_statement_parser': {
-            'handlers': ['console', 'file'],
+        'bankmanagement': {
+            'handlers': ['file'],
             'level': 'DEBUG',
             'propagate': False,
         },
-        'bankmanagement.services.scheduler': {
-            'handlers': ['console', 'file'],
-            'level': 'DEBUG',
-            'propagate': False,
-        },
-        'bankmanagement.services.parser': {
-            'handlers': ['console', 'file'],
-            'level': 'DEBUG',
-            'propagate': False,
-        },
-        'bankmanagement.services.reconcilation': {
-            'handlers': ['console', 'file'],
+        'bankmanagement.services': {
+            'handlers': ['file'],
             'level': 'DEBUG',
             'propagate': False,
         },
         'document': {
-            'handlers': ['console', 'file'],
+            'handlers': ['file'],
+            'level': 'DEBUG',
+            'propagate': False,
+        },
+        'paymentadvice': {
+            'handlers': ['file'],
             'level': 'DEBUG',
             'propagate': False,
         },

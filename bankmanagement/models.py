@@ -16,6 +16,7 @@ class BankStatement(models.Model):
     document = models.OneToOneField(Document, on_delete=models.CASCADE, related_name='bank_statement')
     
     # Bank statement basic information
+    total_receivable_amt = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True)
     statement_period = models.CharField(max_length=100, blank=True, null=True)
     statement_date = models.DateField(blank=True, null=True)
     bank_name = models.CharField(max_length=255, blank=True, null=True)

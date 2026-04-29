@@ -22,9 +22,9 @@ from django.conf.urls.static import static
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/documents/', include('document.urls')),
-    path('api/processing/', include('bankmanagement.urls')),
     path('api/invoices/', include('invoicemanagement.urls')),
-    path('api/bank/', include('bankmanagement.urls_bank')),
+    path('api/bankmanagement/', include('bankmanagement.urls')),
+    path('api/payment/', include('paymentadvice.urls')),
 ]
 
 # Serve media files during development
