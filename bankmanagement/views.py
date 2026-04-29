@@ -1,94 +1,158 @@
 from rest_framework import status, generics, permissions
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
+from rest_framework.pagination import PageNumberPagination
 from django.shortcuts import get_object_or_404
 import logging
 
-from .serializers import ProcessingResultSerializer
-from .tasks import process_document_task
-from document.models import Document, ProcessingResult
+from .models import BankStatement, BankTransaction
+from .serializers import BankStatementDetailsSerializer, BankStatementSerializer, BankTransactionSerializer
+from document.models import Document
 
 logger = logging.getLogger(__name__)
 
 
-@api_view(['POST'])
-@permission_classes([permissions.IsAuthenticated])
-def process_document(request, document_id):
-    """
-    API endpoint to manually trigger document processing
-    """
-    try:
-        document = get_object_or_404(Document, id=document_id, uploaded_by=request.user)
-        
-        # Start processing
-        result = process_document_task(str(document.id))
-        
-        if result['status'] == 'success':
-            return Response(result)
-        else:
-            return Response(result, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-            
-    except Exception as e:
-        logger.error(f"Manual processing failed: {e}")
-        return Response(
-            {'error': str(e)},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
-
-
-class ProcessingResultView(generics.RetrieveAPIView):
-    """
-    API endpoint to retrieve processing results for a document
-    """
-    serializer_class = ProcessingResultSerializer
-    permission_classes = [permissions.IsAuthenticated]
+class BankStatementPagination(PageNumberPagination):
+    """Custom pagination for bank statements with scroll-based loading"""
+    page_size = 10
+    page_size_query_param = 'page_size'
+    max_page_size = 100
     
-    def get_object(self):
-        document_id = self.kwargs['document_id']
-        document = get_object_or_404(Document, id=document_id, uploaded_by=self.request.user)
-        
-        try:
-            return document.processing_result
-        except ProcessingResult.DoesNotExist:
-            return None
+    def get_paginated_response(self, data):
+        return Response({
+            'next': self.get_next_link(),
+            'previous': self.get_previous_link(),
+            'count': self.page.paginator.count,
+            'total_pages': self.page.paginator.num_pages,
+            'current_page': self.page.number,
+            'has_next': self.page.has_next(),
+            'has_previous': self.page.has_previous(),
+            'results': data
+        })
 
 
-@api_view(['GET'])
-@permission_classes([permissions.IsAuthenticated])
-def processing_summary(request, document_id):
-    """
-    API endpoint to get a summary of processing results
-    """
-    try:
-        document = get_object_or_404(Document, id=document_id, uploaded_by=request.user)
+class BankStatementListCreateView(generics.ListCreateAPIView):
+    """View to list and create bank statements"""
+    queryset = BankStatement.objects.all()
+    serializer_class = BankStatementSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+
+class BankStatementDetailsListView(generics.ListAPIView):
+    """View to list bank statements with all related transactions in flattened format"""
+    queryset = BankStatement.objects.select_related('document').prefetch_related('transactions').all()
+    serializer_class = BankStatementDetailsSerializer
+    pagination_class = BankStatementPagination
+    # permission_classes = [permissions.IsAuthenticated]
+    
         
-        summary = {
-            'document_id': str(document.id),
-            'original_filename': document.filename,
-            'file_type': document.file_type,
-            'status': document.status,
-            'uploaded_at': document.uploaded_at,
-            'processed_at': document.processed_at,
-            'document_type': document.document_type,
-            'confidence_score': document.confidence_score,
-        }
+    def list(self, request, *args, **kwargs):
+        """
+        Override list method to create flattened response with statement and transaction data
+        """
+        # Get base queryset - only statements with transactions
+        queryset = BankStatement.objects.prefetch_related('transactions').filter(transactions__isnull=False).distinct()
         
-        # Add processing result if available
-        if hasattr(document, 'processing_result'):
-            result = document.processing_result
-            summary.update({
-                'processing_time': result.processing_time,
-                'has_structured_data': result.structured_data is not None,
-                'validation_passed': result.validation_results.get('is_valid', False) if result.validation_results else None,
-                'final_confidence_score': result.confidence_report.get('final_score', 0) if result.confidence_report else 0,
-                'risk_level': result.confidence_report.get('risk_level', 'unknown') if result.confidence_report else 'unknown',
-            })
+        # Apply filters
+        search = request.query_params.get('search', None)
+        start_date = request.query_params.get('start_date', None)
+        end_date = request.query_params.get('end_date', None)
         
-        return Response(summary)
+        if search:
+            # Search in both account number and transaction details
+            queryset = queryset.filter(
+                account_number__icontains=search
+            ) | queryset.filter(
+                transactions__txn_no__icontains=search
+            )
         
-    except Exception as e:
-        logger.error(f"Failed to get processing summary: {e}")
-        return Response(
-            {'error': str(e)},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
+        if start_date:
+            queryset = queryset.filter(statement_date__gte=start_date)
+        if end_date:
+            queryset = queryset.filter(statement_date__lte=end_date)
+        
+        # Create flattened data structure first
+        flattened_data = []
+        for statement in queryset:
+            # Add statement-level record
+            statement_record = {
+                'Account': statement.account_number,
+                'Transaction': None,
+                'Date': statement.statement_date,
+                'Amount': None,
+                'Total': statement.total_receivable_amt,
+                'Ageing': None,
+                'statement_id': statement.id,
+                'bank_name': statement.bank_name,
+                'statement_period': statement.statement_period,
+                'transaction_type': None
+            }
+            
+            # Add transaction-level records
+            transaction_records = []
+            for transaction in statement.transactions.all():
+                from datetime import date
+                ageing = None
+                if transaction.transaction_date:
+                    delta = date.today() - transaction.transaction_date
+                    ageing = delta.days
+                
+                transaction_record = {
+                    'Account': statement.account_number,
+                    'Transaction': transaction.txn_no,
+                    'Date': transaction.transaction_date,
+                    'Amount': transaction.amount,
+                    'Total': statement.total_receivable_amt,
+                    'Ageing': ageing,
+                    'statement_id': statement.id,
+                    'bank_name': statement.bank_name,
+                    'statement_period': statement.statement_period,
+                    'transaction_type': transaction.transaction_type
+                }
+                transaction_records.append(transaction_record)
+            
+            # Apply search filter at flattened level
+            if search:
+                # Check if statement matches
+                statement_matches = search.lower() in str(statement.account_number).lower() if statement.account_number else False
+                
+                # Check if any transaction matches
+                matching_transactions = [t for t in transaction_records if t['Transaction'] and search.lower() in str(t['Transaction']).lower()]
+                
+                if statement_matches:
+                    flattened_data.append(statement_record)
+                    flattened_data.extend(transaction_records)
+                elif matching_transactions:
+                    flattened_data.append(statement_record)
+                    flattened_data.extend(matching_transactions)
+            else:
+                # No search filter, add everything
+                flattened_data.append(statement_record)
+                flattened_data.extend(transaction_records)
+        
+        # Now paginate the flattened data
+        page_size = int(request.query_params.get('page_size', self.pagination_class.page_size))
+        page_number = int(request.query_params.get('page', 1))
+        
+        start_index = (page_number - 1) * page_size
+        end_index = start_index + page_size
+        
+        paginated_data = flattened_data[start_index:end_index]
+        
+        # Create pagination response manually
+        total_count = len(flattened_data)
+        total_pages = (total_count + page_size - 1) // page_size
+        
+        return Response({
+            'next': f"http://localhost:8000/api/bankmanagement/statements/details/?page={page_number + 1}&page_size={page_size}" if page_number < total_pages else None,
+            'previous': f"http://localhost:8000/api/bankmanagement/statements/details/?page={page_number - 1}&page_size={page_size}" if page_number > 1 else None,
+            'count': total_count,
+            'total_pages': total_pages,
+            'current_page': page_number,
+            'has_next': page_number < total_pages,
+            'has_previous': page_number > 1,
+            'results': paginated_data
+        })
+
+
+

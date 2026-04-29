@@ -8,27 +8,29 @@ class InvoiceLineItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = InvoiceLineItem
         fields = [
-            'id', 'description', 'quantity', 'unit_price', 'total_price',
-            'item_code', 'tax_rate', 'discount_amount', 'created_at', 'updated_at'
+            'id', 'description', 'amt', 'category', 'quantity', 'unit_price',
+            'confidence_score', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
 
 
 class InvoiceSerializer(serializers.ModelSerializer):
-    """Serializer for Invoice model"""
-    line_items = InvoiceLineItemSerializer(many=True, read_only=True)
+    """Serializer for Invoice model with nested line items"""
+    lines = serializers.SerializerMethodField()
     
     class Meta:
         model = Invoice
         fields = [
-            'id', 'document', 'user', 'invoice_number', 'invoice_date', 'due_date',
-            'vendor_name', 'vendor_address', 'vendor_tax_id',
-            'customer_name', 'customer_address', 'customer_tax_id',
-            'subtotal', 'tax_amount', 'total_amount', 'currency',
+            'id', 'document', 'invoiceNo', 'invoicedate', 'totalAmount',
             'status', 'confidence_score', 'extraction_method',
-            'created_at', 'updated_at', 'line_items'
+            'created_at', 'updated_at', 'reconciliation_status', 'reconciliation', 'lines'
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at', 'line_items']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+    
+    def get_lines(self, obj):
+        """Get line items for this invoice"""
+        line_items = obj.invoice_entries.all()
+        return InvoiceLineItemSerializer(line_items, many=True).data
 
 
 class InvoiceCreateSerializer(serializers.ModelSerializer):
@@ -38,11 +40,8 @@ class InvoiceCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Invoice
         fields = [
-            'document', 'invoice_number', 'invoice_date', 'due_date',
-            'vendor_name', 'vendor_address', 'vendor_tax_id',
-            'customer_name', 'customer_address', 'customer_tax_id',
-            'subtotal', 'tax_amount', 'total_amount', 'currency',
-            'status', 'confidence_score', 'extraction_method', 'line_items'
+            'document', 'invoiceNo', 'invoicedate', 'totalAmount',
+            'status', 'confidence_score', 'extraction_method'
         ]
     
     def create(self, validated_data):

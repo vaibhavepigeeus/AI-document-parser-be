@@ -4,7 +4,6 @@ from . import views
 app_name = 'bankmanagement'
 
 urlpatterns = [
-    path('<uuid:document_id>/process/', views.process_document, name='process-document'),
-    path('<uuid:document_id>/result/', views.ProcessingResultView.as_view(), name='processing-result'),
-    path('<uuid:document_id>/summary/', views.processing_summary, name='processing-summary'),
+    path('statements/', views.BankStatementListCreateView.as_view(), name='bank-statement-list-create'),
+    path('statements/details/', views.BankStatementDetailsListView.as_view(), name='bank-statement-details-list'),
 ]

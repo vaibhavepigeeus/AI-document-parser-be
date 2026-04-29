@@ -1,6 +1,7 @@
 from rest_framework import status, generics, permissions
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
+from rest_framework.pagination import PageNumberPagination
 from django.shortcuts import get_object_or_404
 import logging
 
@@ -11,134 +12,91 @@ from document.models import Document
 logger = logging.getLogger(__name__)
 
 
-class InvoiceListCreateView(generics.ListCreateAPIView):
-    """View to list and create invoices"""
+class InvoicePagination(PageNumberPagination):
+    """Custom pagination for invoices with scroll-based loading"""
+    page_size = 10
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+    
+    def get_paginated_response(self, data):
+        return Response({
+            'next': self.get_next_link(),
+            'previous': self.get_previous_link(),
+            'count': self.page.paginator.count,
+            'total_pages': self.page.paginator.num_pages,
+            'current_page': self.page.number,
+            'has_next': self.page.has_next(),
+            'has_previous': self.page.has_previous(),
+            'results': data
+        })
+
+
+class InvoiceListView(generics.ListAPIView):
+    """View to list invoices with pagination and filtering"""
     serializer_class = InvoiceSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    # permission_classes = [permissions.IsAuthenticated]
+    pagination_class = InvoicePagination
     
     def get_queryset(self):
-        return Invoice.objects.filter(user=self.request.user)
+        """
+        Override to apply search and date filters
+        """
+        queryset = Invoice.objects.all()
+        
+        # Apply filters
+        search = self.request.query_params.get('search', None)
+        start_date = self.request.query_params.get('start_date', None)
+        end_date = self.request.query_params.get('end_date', None)
+        status = self.request.query_params.get('status', None)
+        reconciliation_status = self.request.query_params.get('reconciliation_status', None)
+        
+        if search:
+            # Search in invoice number
+            queryset = queryset.filter(invoiceNo__icontains=search)
+        
+        if start_date:
+            queryset = queryset.filter(invoicedate__gte=start_date)
+        
+        if end_date:
+            queryset = queryset.filter(invoicedate__lte=end_date)
+            
+        if status:
+            queryset = queryset.filter(status=status)
+            
+        if reconciliation_status:
+            queryset = queryset.filter(reconciliation_status=reconciliation_status)
+        
+        return queryset
     
-    def get_serializer_class(self):
-        if self.request.method == 'POST':
-            return InvoiceCreateSerializer
-        return InvoiceSerializer
-    
-    def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
-
-
-class InvoiceDetailView(generics.RetrieveUpdateDestroyAPIView):
-    """View to retrieve, update, and delete invoices"""
-    serializer_class = InvoiceSerializer
-    permission_classes = [permissions.IsAuthenticated]
-    
-    def get_queryset(self):
-        return Invoice.objects.filter(user=self.request.user)
-
-
-@api_view(['GET'])
-@permission_classes([permissions.IsAuthenticated])
-def invoice_summary(request, document_id):
-    """Get invoice summary for a document"""
-    try:
-        document = get_object_or_404(Document, id=document_id, user=request.user)
-        invoice = get_object_or_404(Invoice, document=document, user=request.user)
+    def list(self, request, *args, **kwargs):
+        """
+        Override list method to handle filter behavior and nested data structure
+        """
+        # Check if any filter is applied
+        search = request.query_params.get('search', None)
+        start_date = self.request.query_params.get('start_date', None)
+        end_date = self.request.query_params.get('end_date', None)
+        status = self.request.query_params.get('status', None)
+        reconciliation_status = self.request.query_params.get('reconciliation_status', None)
         
-        line_item_count = invoice.line_items.count()
+        has_filters = bool(search or start_date or end_date or status or reconciliation_status)
         
-        summary_data = {
-            'invoice_id': invoice.id,
-            'invoice_number': invoice.invoice_number,
-            'vendor_name': invoice.vendor_name,
-            'total_amount': invoice.total_amount,
-            'currency': invoice.currency,
-            'status': invoice.status,
-            'created_at': invoice.created_at,
-            'line_item_count': line_item_count,
-            'confidence_score': invoice.confidence_score
-        }
-        
-        serializer = InvoiceSummarySerializer(summary_data)
-        return Response(serializer.data)
-        
-    except Invoice.DoesNotExist:
-        return Response(
-            {'error': 'No invoice found for this document'},
-            status=status.HTTP_404_NOT_FOUND
-        )
-
-
-@api_view(['POST'])
-@permission_classes([permissions.IsAuthenticated])
-def create_invoice_from_document(request, document_id):
-    """Create invoice from processed document"""
-    try:
-        document = get_object_or_404(Document, id=document_id, user=request.user)
-        
-        if document.document_type != 'invoice':
-            return Response(
-                {'error': 'Document is not an invoice'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Check if invoice already exists
-        if hasattr(document, 'invoice'):
-            return Response(
-                {'error': 'Invoice already exists for this document'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Extract invoice data from processing result
-        if not hasattr(document, 'processingresult'):
-            return Response(
-                {'error': 'Document has not been processed yet'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        processing_result = document.processingresult
-        structured_data = processing_result.structured_data or {}
-        
-        # Create invoice with extracted data
-        invoice_data = {
-            'document': document,
-            'invoice_number': structured_data.get('invoice_number'),
-            'invoice_date': structured_data.get('invoice_date'),
-            'due_date': structured_data.get('due_date'),
-            'vendor_name': structured_data.get('vendor_name'),
-            'vendor_address': structured_data.get('vendor_address'),
-            'customer_name': structured_data.get('customer_name'),
-            'customer_address': structured_data.get('customer_address'),
-            'subtotal': structured_data.get('subtotal'),
-            'tax_amount': structured_data.get('tax_amount'),
-            'total_amount': structured_data.get('total_amount'),
-            'currency': structured_data.get('currency', 'USD'),
-            'confidence_score': processing_result.confidence_report.get('overall_confidence', 0.0),
-            'extraction_method': 'automated'
-        }
-        
-        invoice = Invoice.objects.create(user=request.user, **invoice_data)
-        
-        # Create line items if available
-        line_items = structured_data.get('line_items', [])
-        for item_data in line_items:
-            InvoiceLineItem.objects.create(
-                invoice=invoice,
-                description=item_data.get('description', ''),
-                quantity=item_data.get('quantity', 1),
-                unit_price=item_data.get('unit_price', 0),
-                total_price=item_data.get('total_price', 0),
-                item_code=item_data.get('item_code'),
-                tax_rate=item_data.get('tax_rate'),
-                discount_amount=item_data.get('discount_amount')
-            )
-        
-        serializer = InvoiceSerializer(invoice)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-        
-    except Exception as e:
-        logger.error(f"Error creating invoice from document {document_id}: {str(e)}")
-        return Response(
-            {'error': 'Failed to create invoice from document'},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
+        if has_filters:
+            # Return all results without pagination when filters are applied
+            queryset = self.get_queryset()
+            serializer = self.get_serializer(queryset, many=True)
+            
+            return Response({
+                'next': None,
+                'previous': None,
+                'count': len(serializer.data),
+                'total_pages': 1,
+                'current_page': 1,
+                'has_next': False,
+                'has_previous': False,
+                'results': serializer.data
+            })
+        else:
+            # Use default pagination when no filters
+            response = super().list(request, *args, **kwargs)
+            return response

@@ -119,3 +119,97 @@ class Reconciliation(models.Model):
     amount_variance = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
     matching_confidence = models.FloatField(null=True, blank=True)
     notes = models.TextField(null=True, blank=True)
+
+
+class SchedulerConfig(models.Model):
+    """Model to store scheduler configuration and status persistently"""
+    
+    STATUS_CHOICES = [
+        ('stopped', 'Stopped'),
+        ('running', 'Running'),
+        ('paused', 'Paused'),
+        ('error', 'Error'),
+    ]
+    
+    # Scheduler status
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='stopped')
+    is_enabled = models.BooleanField(default=False, help_text="Enable/disable the entire scheduler")
+    
+    # Job configurations
+    parser_enabled = models.BooleanField(default=True, help_text="Enable bank statement parsing job")
+    parser_interval = models.PositiveIntegerField(default=60, help_text="Parser interval in seconds (10-3600)")
+    
+    reconciliation_enabled = models.BooleanField(default=False, help_text="Enable bank reconciliation job")
+    reconciliation_interval = models.PositiveIntegerField(default=60, help_text="Reconciliation interval in seconds (10-3600)")
+    
+    email_parser_enabled = models.BooleanField(default=False, help_text="Enable email parsing job")
+    email_parser_interval = models.PositiveIntegerField(default=300, help_text="Email parser interval in seconds (10-3600)")
+    
+    # Scheduler metadata
+    last_run = models.DateTimeField(blank=True, null=True)
+    next_run = models.DateTimeField(blank=True, null=True)
+    error_message = models.TextField(blank=True, null=True)
+    job_count = models.PositiveIntegerField(default=0, help_text="Total jobs executed")
+    
+    # Process tracking
+    process_id = models.PositiveIntegerField(blank=True, null=True, help_text="Current scheduler process ID")
+    host_info = models.CharField(max_length=255, blank=True, null=True, help_text="Host where scheduler is running")
+    
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = "Scheduler Configuration"
+        verbose_name_plural = "Scheduler Configurations"
+        ordering = ['-updated_at']
+    
+    def __str__(self):
+        return f"Scheduler Config - {self.get_status_display()}"
+    
+    def clean(self):
+        """Validate interval values"""
+        from django.core.exceptions import ValidationError
+        if not (10 <= self.parser_interval <= 3600):
+            raise ValidationError({'parser_interval': 'Interval must be between 10 and 3600 seconds'})
+        if not (10 <= self.reconciliation_interval <= 3600):
+            raise ValidationError({'reconciliation_interval': 'Interval must be between 10 and 3600 seconds'})
+        if not (10 <= self.email_parser_interval <= 3600):
+            raise ValidationError({'email_parser_interval': 'Interval must be between 10 and 3600 seconds'})
+    
+    @classmethod
+    def get_config(cls):
+        """Get or create the scheduler configuration"""
+        config, created = cls.objects.get_or_create(
+            pk=1,  # Always use ID=1 for singleton pattern
+            defaults={
+                'status': 'stopped',
+                'is_enabled': False,
+                'parser_enabled': True,
+                'parser_interval': 60,
+                'reconciliation_enabled': False,
+                'reconciliation_interval': 60,
+                'email_parser_enabled': False,
+                'email_parser_interval': 300,
+            }
+        )
+        return config
+    
+    def get_status_dict(self):
+        """Get configuration as dictionary for scheduler service"""
+        return {
+            'is_running': self.status == 'running',
+            'is_enabled': self.is_enabled,
+            'parser_enabled': self.parser_enabled,
+            'parser_interval': self.parser_interval,
+            'reconciliation_enabled': self.reconciliation_enabled,
+            'reconciliation_interval': self.reconciliation_interval,
+            'email_parser_enabled': self.email_parser_enabled,
+            'email_parser_interval': self.email_parser_interval,
+            'last_run': self.last_run,
+            'next_run': self.next_run,
+            'error_message': self.error_message,
+            'job_count': self.job_count,
+            'process_id': self.process_id,
+            'host_info': self.host_info,
+        }
